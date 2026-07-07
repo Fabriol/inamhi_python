@@ -179,24 +179,10 @@
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     }
 
-    .swal-firmaec-popup {
-        border-radius: 16px !important;
-        padding: 0 !important;
-        overflow: hidden;
-    }
-
-    .swal-firmaec-header {
-        background: linear-gradient(135deg, #1e3a8a, #0ea5e9);
-        padding: 20px !important;
-        color: white !important;
-        margin: 0 !important;
-    }
-
-    .swal-firmaec-title {
-        color: white !important;
-        font-size: 18px !important;
-        font-weight: 900 !important;
-        margin: 0 !important;
+    /* Ocultar el ojito de Microsoft Edge nativo en el modal de firma */
+    input[type="password"]::-ms-reveal,
+    input[type="password"]::-ms-clear {
+        display: none !important;
     }
 
     @media print {
@@ -255,8 +241,6 @@
 
 {% macro input_text(name, label, type='text', width='', max_len='', js_val='', val='') %}
 {% if admin or name in asignados %}
-
-{# STRING LIMPIO PARA EVITAR ERROR EN VS CODE #}
 {% set oninput_str = "window.convertirMayusculas(this);" %}
 {% if js_val %}
 {% set oninput_str = oninput_str ~ " window." ~ js_val ~ "(this);" %}
@@ -349,20 +333,19 @@
 <div class="page fade-in">
     <div class="page-header no-print">
         <div>
-            <span class="badge bg-primary rounded-pill mb-2 px-3 py-1">Trámite Institucional Único #{{ solicitud.id }}</span>
+            <span class="badge bg-primary rounded-pill mb-2 px-3 py-1">Trámite Institucional Único #{{ solicitud.id
+                }}</span>
             <h1 style="font-size: 24px; font-weight: 900; color: #1e3a8a; margin: 0;">Gestión de Liquidación Base</h1>
         </div>
         <div>
-            <!-- BOTÓN CORREGIDO CON NAVEGACIÓN INTELIGENTE -->
             <a href="javascript:history.back()" class="btn btn-lg btn-secondary fw-bold shadow-sm me-2">
                 <i class="bi bi-arrow-left-circle-fill me-2"></i> Volver Atrás
             </a>
-            
             <button class="btn btn-lg btn-light border fw-bold shadow-sm me-2 text-dark" onclick="window.print()">
                 <i class="bi bi-printer-fill text-primary me-2"></i> Imprimir Hoja Espejo
             </button>
-            
-            <a href="/paz-salvo/descargar-pdf/{{ solicitud.id }}" target="_blank" class="btn btn-lg btn-danger fw-bold shadow-sm">
+            <a href="/paz-salvo/descargar-pdf/{{ solicitud.id }}" target="_blank"
+                class="btn btn-lg btn-danger fw-bold shadow-sm">
                 <i class="bi bi-file-pdf-fill me-2"></i> Descargar PDF Legal
             </a>
         </div>
@@ -374,9 +357,20 @@
                 class="bi bi-shield-lock-fill me-2"></i> Panel de Designación Analítica Completa (1 al 10)</h5>
         <p style="font-size: 12px; color: var(--slate-500); margin-bottom: 15px;">Seleccione los campos exactos de
             CUALQUIER sección del formulario y asígnelos al servidor correspondiente.</p>
+
         <form hx-post="/paz-salvo/asignar-campos/{{ solicitud.id }}" hx-target="#live-alert">
             <div class="row g-3 align-items-start">
                 <div class="col-md-8">
+
+                    <div class="d-flex justify-content-between align-items-center mb-2 bg-light p-2 rounded border">
+                        <span class="fw-bold text-secondary" style="font-size: 11px;"><i
+                                class="bi bi-list-check me-1"></i> SECCIONES DISPONIBLES</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary fw-bold"
+                            onclick="window.toggleSeleccionGlobal(this)" id="btnToggleAll">
+                            <i class="bi bi-ui-checks"></i> Marcar Todo
+                        </button>
+                    </div>
+
                     <div class="accordion" id="accordionAdmin" style="box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                         <div class="accordion-item">
                             <h2 class="accordion-header" id="headSec12">
@@ -1473,7 +1467,8 @@
             </form>
 
             <div class="p-3 bg-light border-top text-end mt-3">
-                <button type="button" class="btn btn-success fw-bold px-4 py-2" onclick="window.validarYGuardarTodo()">
+                <button type="button" class="btn btn-success fw-bold px-4 py-2"
+                    onclick="window.validarYGuardarTodo(this)">
                     <i class="bi bi-cloud-check-fill me-2"></i> Guardar Mis Respuestas
                 </button>
             </div>
@@ -1548,6 +1543,26 @@
         }
     });
 
+    window.toggleSeleccionGlobal = (btn) => {
+        let checkboxes = document.querySelectorAll('input[type="checkbox"][name="campos"]:not([disabled])');
+        if (checkboxes.length === 0) {
+            Swal.fire('Información', 'Todos los campos ya han sido delegados, no hay campos libres.', 'info');
+            return;
+        }
+
+        let allChecked = Array.from(checkboxes).every(cb => cb.checked);
+
+        checkboxes.forEach(cb => cb.checked = !allChecked);
+
+        if (allChecked) {
+            btn.innerHTML = '<i class="bi bi-ui-checks"></i> Marcar Todo';
+            btn.classList.replace('btn-primary', 'btn-outline-primary');
+        } else {
+            btn.innerHTML = '<i class="bi bi-x-square"></i> Desmarcar Todos';
+            btn.classList.replace('btn-outline-primary', 'btn-primary');
+        }
+    };
+
     window.filtrarCantonesEcuador = () => {
         let provSelect = document.getElementById('provinciaSelect');
         let cantSelect = document.getElementById('cantonSelect');
@@ -1586,10 +1601,14 @@
         } else if (cedula.length > 0) { window.mostrarError(el, "⚠ Faltan dígitos (10)."); } else { window.quitarError(el); }
     };
 
-    window.abrirModalFirmaEC = (campoFirma) => {
+    // ==========================================
+    // SISTEMA DE FIRMA PAdES (DISEÑO PREMIUM + ENTER + OJITO)
+    // ==========================================
+    window.abrirModalFirmaEC = (campoFirma, labelFirma = 'Firma Institucional') => {
         let form = document.getElementById('formularioOficial');
         let requeridos = form.querySelectorAll('.doc-input:not([disabled]):not([readonly])');
         let faltanDatos = false;
+
         requeridos.forEach((el) => {
             if (el.value.trim() === '') { window.mostrarError(el, '⚠ Obligatorio.'); faltanDatos = true; }
         });
@@ -1600,44 +1619,82 @@
         }
 
         Swal.fire({
-            title: '<h2 class="swal-firmaec-title">Validación Criptográfica PAdES</h2>',
+            title: '<h3 style="color: #1e3a8a; font-weight: 900; margin: 0;"><i class="bi bi-shield-lock-fill text-primary me-2"></i> Validación PAdES</h3>',
             html: `
-                <style>#swal-p12-pass::-ms-reveal, #swal-p12-pass::-webkit-reveal { display: none !important; }</style>
-                <div style="text-align: left; padding: 15px;">
-                    <div style="background: #eff6ff; border-left: 4px solid #2563eb; padding: 10px; margin-bottom: 20px; border-radius: 4px; font-size: 12px; color: #1e3a8a; line-height: 1.4;">
-                        <i class="bi bi-info-circle-fill me-2"></i> Cargue su certificado <b>.p12</b> o <b>.pfx</b>. El sistema estampará criptográficamente su firma.
+                <div style="text-align: left; padding: 10px 0;">
+                    <div style="background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px; margin-bottom: 20px; border-radius: 8px; font-size: 13px; color: #1e3a8a;">
+                        <i class="bi bi-info-circle-fill me-2"></i> Cargue su certificado <b>.p12</b> o <b>.pfx</b>. El sistema estampará criptográficamente su firma en: <br><b style="color:#000;">${labelFirma}</b>.
                     </div>
+                    
                     <div class="mb-3">
-                        <label style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 6px; display: block;">1. Archivo de Firma (.p12 / .pfx)</label>
-                        <input type="file" id="swal-p12-file" accept=".p12,.pfx" style="width: 100%; padding: 12px; border: 2px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; outline:none; transition: 0.3s; cursor: pointer;">
+                        <label style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 6px; display: block;">1. Archivo de Firma</label>
+                        <input type="file" id="swal-p12-file" accept=".p12,.pfx" class="form-control" style="border: 2px dashed #cbd5e1; border-radius: 12px; padding: 10px; background: #f8fafc; width: 100%;">
                     </div>
+                    
                     <div>
                         <label style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 6px; display: block;">2. Contraseña del Certificado</label>
-                        <div style="position: relative;">
-                            <input type="password" id="swal-p12-pass" placeholder="••••••••••••••••" onkeyup="if(event.key === 'Enter') Swal.clickConfirm()" style="width: 100%; padding: 12px; padding-right: 45px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; outline:none; transition: 0.3s;">
-                            <button type="button" tabindex="-1" onclick="let p = document.getElementById('swal-p12-pass'); let i = this.querySelector('i'); if(p.type === 'password'){ p.type='text'; i.classList.remove('bi-eye-slash-fill'); i.classList.add('bi-eye-fill'); } else { p.type='password'; i.classList.remove('bi-eye-fill'); i.classList.add('bi-eye-slash-fill'); }" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #64748b; padding: 0;">
-                                <i class="bi bi-eye-slash-fill" style="font-size: 18px;"></i>
+                        <div style="position: relative; display: flex; align-items: center;">
+                            <input type="password" id="swal-p12-pass" class="form-control" placeholder="••••••••••••••••" style="border-radius: 12px; padding: 12px 45px 12px 15px; border: 2px solid #e2e8f0; font-size: 14px; width: 100%;">
+                            <button type="button" id="swal-toggle-pass" style="position: absolute; right: 10px; background: none; border: none; color: #64748b; font-size: 1.2rem; cursor: pointer; padding: 0 5px;">
+                                <i class="bi bi-eye-fill" id="swal-eye-icon"></i>
                             </button>
                         </div>
                     </div>
                 </div>
             `,
-            showCancelButton: true, confirmButtonText: '<i class="bi bi-shield-lock-fill me-2"></i> Inyectar Firma PAdES', cancelButtonText: 'Cancelar',
-            customClass: { popup: 'swal-firmaec-popup', header: 'swal-firmaec-header', confirmButton: 'btn btn-primary px-4 py-2 fw-bold shadow-sm', cancelButton: 'btn btn-light px-4 py-2 fw-bold' },
+            showCancelButton: true,
+            confirmButtonText: '<i class="bi bi-pen-fill me-2"></i> Estampar Firma',
+            cancelButtonText: 'Cancelar',
+            customClass: {
+                popup: 'rounded-4 shadow-lg',
+                confirmButton: 'btn btn-primary px-4 py-2 fw-bold shadow-sm rounded-pill',
+                cancelButton: 'btn btn-light px-4 py-2 fw-bold rounded-pill border'
+            },
+            didOpen: () => {
+                const passInput = document.getElementById('swal-p12-pass');
+                const toggleBtn = document.getElementById('swal-toggle-pass');
+                const eyeIcon = document.getElementById('swal-eye-icon');
+
+                // Lógica del Ojito (Mostrar/Ocultar Clave)
+                toggleBtn.addEventListener('click', () => {
+                    if (passInput.type === 'password') {
+                        passInput.type = 'text';
+                        eyeIcon.classList.replace('bi-eye-fill', 'bi-eye-slash-fill');
+                        eyeIcon.style.color = '#2563eb';
+                    } else {
+                        passInput.type = 'password';
+                        eyeIcon.classList.replace('bi-eye-slash-fill', 'bi-eye-fill');
+                        eyeIcon.style.color = '#64748b';
+                    }
+                });
+
+                // Lógica de la tecla ENTER para firmar directamente
+                passInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        Swal.clickConfirm();
+                    }
+                });
+            },
             showLoaderOnConfirm: true,
             preConfirm: async () => {
                 let fileInput = document.getElementById('swal-p12-file').files[0];
                 let passInput = document.getElementById('swal-p12-pass').value;
 
-                if (!fileInput || !passInput) { Swal.showValidationMessage('⚠️ Faltan datos. Adjunte el certificado y la contraseña.'); return false; }
+                if (!fileInput || !passInput) {
+                    Swal.showValidationMessage('⚠️ Faltan datos. Adjunte el certificado y la contraseña.');
+                    return false;
+                }
 
+                // Guardado preliminar silencioso
                 let formPayload = new FormData(form);
                 try {
                     await fetch(form.action, { method: 'POST', body: formPayload });
                 } catch (e) {
-                    console.warn(e);
+                    console.warn("Aviso interno:", e);
                 }
 
+                // Envío de la firma
                 let formData = new FormData();
                 formData.append('pdf_firmado', fileInput);
                 formData.append('password', passInput);
@@ -1659,7 +1716,10 @@
         });
     };
 
-    window.validarYGuardarTodo = () => {
+    // ==========================================
+    // SISTEMA DE GUARDADO CON BLOQUEO DE BOTÓN
+    // ==========================================
+    window.validarYGuardarTodo = (btnContext) => {
         let form = document.getElementById('formularioOficial');
         let requeridos = form.querySelectorAll('.doc-input:not([disabled]):not([readonly])');
         let firmas = form.querySelectorAll('input[type="hidden"][id^="input_"]');
@@ -1685,9 +1745,24 @@
             return;
         }
 
-        Swal.fire({ title: '¿Sellar Trámite?', text: 'Se guardarán de manera irreversible los datos llenados.', icon: 'question', showCancelButton: true, confirmButtonText: 'Sí, Guardar Trámite', confirmButtonColor: '#16a34a' }).then((result) => {
+        Swal.fire({
+            title: '¿Sellar Trámite?',
+            text: 'Se guardarán de manera irreversible los datos llenados. Verifique que la información sea correcta.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Sí, Guardar y Sellar',
+            confirmButtonColor: '#16a34a',
+            cancelButtonText: 'Revisar de nuevo'
+        }).then((result) => {
             if (result.isConfirmed) {
-                Swal.fire({ title: 'Guardando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading() } });
+                // Bloquear el botón principal para evitar múltiples clics
+                if (btnContext) {
+                    btnContext.disabled = true;
+                    btnContext.innerHTML = '<span class="spinner-grow spinner-grow-sm me-2"></span> Procesando...';
+                    btnContext.classList.replace('btn-success', 'btn-secondary');
+                }
+
+                Swal.fire({ title: 'Guardando de forma segura...', allowOutsideClick: false, didOpen: () => { Swal.showLoading() } });
                 form.submit();
             }
         });
