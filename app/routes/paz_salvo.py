@@ -4,37 +4,32 @@ from werkzeug.security import generate_password_hash
 import os
 import io
 
-# Generador de Códigos QR nativos en formato SVG (Vectores, no imágenes)
 import qrcode
 import qrcode.image.svg
 
-# Modelos
 from app.models.base import db, Usuario, Rol, SolicitudPazSalvo, Respuesta, LogAuditoria
 from app.services.pdf_service import generar_documento_paz_salvo
 
-# Librerías criptográficas para la firma PAdES
 from pyhanko.sign import signers
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.sign.fields import SigFieldSpec, append_signature_field
-from pyhanko.sign import fields # Importación necesaria para el PAdES estricto
+from pyhanko.sign import fields 
 
 paz_salvo_bp = Blueprint('paz_salvo', __name__)
 
 # ====================================================================
-# FUNCIÓN GLOBAL: GENERADOR DE QR VECTORIAL EXACTO A FIRMAEC
+# FUNCIÓN GLOBAL: GENERADOR DE QR VECTORIAL
 # ====================================================================
 @paz_salvo_bp.app_template_global()
 def generar_qr_svg(nombre):
-    """Genera un QR real en formato SVG para que WeasyPrint lo dibuje nativamente en el PDF"""
     if not nombre:
         nombre = "RESPONSABLE"
         
-    # Datos que hacen que el QR se vea complejo e idéntico al de la foto
     data = f"Validar únicamente en FirmaEC.\nFirmado electrónicamente por:\n{nombre}"
     
     factory = qrcode.image.svg.SvgPathImage
     qr = qrcode.QRCode(
-        version=4, # Versión 4 garantiza esa densidad visual del QR de la foto
+        version=4, 
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=10,
         border=0,
@@ -44,18 +39,15 @@ def generar_qr_svg(nombre):
     qr.make(fit=True)
     img = qr.make_image()
     
-    # Extraer únicamente la etiqueta <svg> limpia
     svg_str = img.to_string(encoding='unicode')
     if "<?xml" in svg_str:
         svg_str = svg_str.split("?>")[-1].strip()
         
-    # Inyectar la clase CSS para que coincida con tu diseño
     svg_str = svg_str.replace('<svg ', '<svg class="firmaec-qr" preserveAspectRatio="xMidYMid meet" ')
     return svg_str
 
-
 # ====================================================================
-# 1. RUTA: CREAR NUEVA SOLICITUD (INTEGRADA CON GESTIÓN DE USUARIOS)
+# RUTAS DE ADMINISTRACIÓN Y ASIGNACIÓN (MANTENIDAS EXACTAMENTE IGUAL)
 # ====================================================================
 @paz_salvo_bp.route('/paz-salvo/nueva', methods=['GET', 'POST'])
 @login_required
@@ -65,7 +57,6 @@ def nueva_solicitud():
         return redirect(url_for('dashboard.index'))
 
     if request.method == 'POST':
-        # Ahora recibimos directamente el ID del usuario seleccionado en la lista
         usuario_id = request.form.get('usuario_id')
         usuario = Usuario.query.get(usuario_id)
 
@@ -73,7 +64,6 @@ def nueva_solicitud():
             flash('Error: El usuario seleccionado no existe en la base de datos.', 'danger')
             return redirect(url_for('paz_salvo.nueva_solicitud'))
 
-        # Verificamos que no tenga trámites en curso
         tramite_creado = SolicitudPazSalvo.query.filter_by(ex_funcionario_id=usuario.id, estado='CREADO').first()
         tramite_proceso = SolicitudPazSalvo.query.filter_by(ex_funcionario_id=usuario.id, estado='EN_PROGRESO').first()
         
@@ -81,7 +71,6 @@ def nueva_solicitud():
             flash(f'El ex funcionario {usuario.cedula} ya cuenta con un trámite activo.', 'warning')
             return redirect(url_for('paz_salvo.nueva_solicitud'))
 
-        # Creamos el trámite conectado a ese usuario
         nueva_solicitud = SolicitudPazSalvo(ex_funcionario_id=usuario.id, estado='CREADO')
         db.session.add(nueva_solicitud)
         
@@ -92,7 +81,6 @@ def nueva_solicitud():
         flash('Expediente creado exitosamente. Los datos de identidad han sido sellados.', 'success')
         return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=nueva_solicitud.id))
 
-    # GET: Obtenemos solo los usuarios que tienen el rol de "Ex Funcionario" para mostrarlos en el select
     rol_ex = Rol.query.filter_by(nombre='Ex Funcionario').first()
     ex_funcionarios = Usuario.query.filter_by(rol_id=rol_ex.id, activo=True).all() if rol_ex else []
 
@@ -102,9 +90,7 @@ def nueva_solicitud():
         
     return render_template('paz_salvo/crear.html', solicitudes=solicitudes_db, ex_funcionarios=ex_funcionarios)
 
-# ====================================================================
-# 2. RUTA: DELEGAR CAMPOS (PANEL ADMINISTRADOR)
-# ====================================================================
+
 @paz_salvo_bp.route('/paz-salvo/asignar-campos/<int:solicitud_id>', methods=['POST'])
 @login_required
 def asignar_campos(solicitud_id):
@@ -136,17 +122,12 @@ def asignar_campos(solicitud_id):
         db.session.rollback()
         return f"<div class='alert alert-danger py-2 mt-2'>Error en BD: {str(e)}</div>"
 
-# ====================================================================
-# 3. RUTA: LLENAR FORMULARIO (PANEL ADMINISTRADOR/RRHH)
-# ====================================================================
 @paz_salvo_bp.route('/paz-salvo/llenar/<int:solicitud_id>', methods=['GET'])
 @login_required
 def llenar_formulario(solicitud_id):
     solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
     solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
-    
     usuarios_disponibles = Usuario.query.filter(Usuario.rol_id != 1).all() 
-    
     respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
     datos_diccionario = {r.campo_formulario: r.valor_respuesta for r in respuestas_db}
     
@@ -165,15 +146,10 @@ def llenar_formulario(solicitud_id):
         if es_su_campo:
             campos_asignados_al_usuario.append(r.campo_formulario)
             
-        # ==========================================
-        # MAGIA DE SEGURIDAD: BLOQUEO ABSOLUTO
-        # ==========================================
-        # Si el campo ya tiene cualquier texto o firma guardada, se bloquea para TODO EL MUNDO
         if r.valor_respuesta and str(r.valor_respuesta).strip() != "":
             if r.campo_formulario not in campos_bloqueados:
                 campos_bloqueados.append(r.campo_formulario)
 
-        # Bloqueo de privacidad para usuarios que no son Administradores
         if current_user.rol.nombre != 'Administrador' and not es_su_campo:
             if r.campo_formulario not in campos_bloqueados:
                 campos_bloqueados.append(r.campo_formulario)
@@ -187,7 +163,7 @@ def llenar_formulario(solicitud_id):
                            datos=datos_diccionario)
 
 # ====================================================================
-# 4. RUTA: GUARDADO ATÓMICO CON PROTECCIÓN DE FIRMA
+# RUTAS CRÍTICAS DE GUARDADO Y FIRMA PADES
 # ====================================================================
 @paz_salvo_bp.route('/paz-salvo/guardar/<int:solicitud_id>', methods=['POST'])
 @login_required
@@ -201,16 +177,13 @@ def guardar_formulario(solicitud_id):
                 continue 
             
             respuesta_existente = Respuesta.query.filter_by(solicitud_id=solicitud_id, campo_formulario=campo).first()
-            
             if respuesta_existente:
                 if respuesta_existente.valor_respuesta != 'FIRMADO':
                     respuesta_existente.valor_respuesta = str(valor).upper()
             else:
                 db.session.add(Respuesta(
-                    solicitud_id=solicitud_id, 
-                    campo_formulario=campo, 
-                    usuario_asignado_id=current_user.id, 
-                    valor_respuesta=str(valor).upper()
+                    solicitud_id=solicitud_id, campo_formulario=campo, 
+                    usuario_asignado_id=current_user.id, valor_respuesta=str(valor).upper()
                 ))
 
         db.session.commit()
@@ -219,85 +192,25 @@ def guardar_formulario(solicitud_id):
         solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
         respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
         
-        directorio_temp = os.path.join(current_app.root_path, 'static', 'temp')
-        os.makedirs(directorio_temp, exist_ok=True)
-        ruta_pdf = os.path.join(directorio_temp, f'PazSalvo_{solicitud.id}.pdf')
+        # BÓVEDA OFICIAL: Reemplaza la carpeta temp por una bóveda segura
+        directorio_oficial = os.path.join(current_app.root_path, 'static', 'documentos_oficiales')
+        os.makedirs(directorio_oficial, exist_ok=True)
+        ruta_pdf = os.path.join(directorio_oficial, f'PazSalvo_{solicitud.id}.pdf')
         
-        # PROTECCIÓN: Si el documento ya tiene firmas, NO lo regeneramos para no aplastar el sello criptográfico.
+        # PROTECCIÓN ABSOLUTA: Solo dibuja el PDF si no hay firmas.
         tiene_firmas = any(r.valor_respuesta == 'FIRMADO' for r in respuestas_db)
         if not tiene_firmas:
             generar_documento_paz_salvo(solicitud, solicitud.ex_funcionario, respuestas_db, ruta_pdf)
         
-        flash('Trámite guardado exitosamente. Los datos han sido sellados.', 'success')
+        flash('Datos guardados exitosamente. El formulario ha sido bloqueado.', 'success')
         
     except Exception as e:
         db.session.rollback() 
-        print(f"Error en guardado atómico: {e}")
         flash('Error de conexión. No se guardó ninguna información.', 'danger')
 
     return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud_id))
 
-# ====================================================================
-# 5. RUTA: ESPEJO EN TIEMPO REAL (HTMX - SIN GUARDADO BD)
-# ====================================================================
-@paz_salvo_bp.route('/actualizar-espejo', methods=['POST'])
-@login_required
-def actualizar_espejo():
-    datos_en_vivo = request.form.to_dict()
-    solicitud_id = datos_en_vivo.get('solicitud_id')
-    
-    if not solicitud_id:
-        return ""
-        
-    solicitud = SolicitudPazSalvo.query.get(solicitud_id)
-    if not solicitud:
-         return ""
-         
-    solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
-    
-    respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
-    datos_combinados = {r.campo_formulario: r.valor_respuesta for r in respuestas_db}
-    
-    for k, v in datos_en_vivo.items():
-        if v.strip() != "":
-            datos_combinados[k] = str(v).upper()
 
-    return render_template('paz_salvo/partials/hoja_espejo.html', 
-                           solicitud=solicitud, 
-                           datos=datos_combinados)
-
-# ====================================================================
-# 6. RUTA: GENERACIÓN Y DESCARGA CON PROTECCIÓN
-# ====================================================================
-@paz_salvo_bp.route('/paz-salvo/descargar-pdf/<int:solicitud_id>')
-@login_required
-def descargar_pdf(solicitud_id):
-    solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
-    solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
-    
-    directorio_temp = os.path.join(current_app.root_path, 'static', 'temp')
-    os.makedirs(directorio_temp, exist_ok=True)
-    ruta_pdf = os.path.join(directorio_temp, f'PazSalvo_{solicitud.id}.pdf')
-    
-    # PROTECCIÓN: Si el archivo ya existe (porque PyHanko lo firmó y lo guardó), NO lo sobreescribimos.
-    # Solo lo generamos de cero si no existe en la carpeta temp.
-    if not os.path.exists(ruta_pdf):
-        respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
-        try:
-            generar_documento_paz_salvo(solicitud, solicitud.ex_funcionario, respuestas_db, ruta_pdf)
-        except Exception as e:
-            flash(f'Error al procesar el PDF: {str(e)}', 'danger')
-            return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud.id))
-    
-    if os.path.exists(ruta_pdf):
-        return send_file(ruta_pdf, as_attachment=True, download_name=f"Paz_y_Salvo_{solicitud.id}.pdf")
-    else:
-        flash('El archivo PDF no se pudo generar.', 'danger')
-        return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud.id))
-
-# ====================================================================
-# 7. RUTA: FIRMA CRIPTOGRÁFICA PAdES INVISIBLE
-# ====================================================================
 @paz_salvo_bp.route('/paz-salvo/subir-firma/<int:solicitud_id>', methods=['POST'])
 @login_required
 def subir_firma_pades(solicitud_id):
@@ -308,13 +221,12 @@ def subir_firma_pades(solicitud_id):
     password = request.form.get('password', '')
     campo_firma = request.form.get('campo', 'Firma_Desconocida')
 
-    directorio_temp = os.path.abspath(os.path.join(current_app.root_path, 'static', 'temp'))
-    os.makedirs(directorio_temp, exist_ok=True)
-    ruta_temp_p12 = os.path.join(directorio_temp, f"firma_{solicitud_id}_{current_user.id}.p12")
+    directorio_oficial = os.path.abspath(os.path.join(current_app.root_path, 'static', 'documentos_oficiales'))
+    os.makedirs(directorio_oficial, exist_ok=True)
+    ruta_temp_p12 = os.path.join(directorio_oficial, f"firma_temp_{current_user.id}.p12")
     archivo_p12.save(ruta_temp_p12)
 
     try:
-        # A. Cargar Certificado y extraer nombre limpio
         signer = signers.SimpleSigner.load_pkcs12(ruta_temp_p12, passphrase=password.encode('utf-8'))
         diccionario_certificado = signer.signing_cert.subject.native
         if 'common_name' in diccionario_certificado:
@@ -323,7 +235,6 @@ def subir_firma_pades(solicitud_id):
             texto_bruto = signer.signing_cert.subject.human_friendly
             nombre_firmante = texto_bruto.split(',')[0].replace('COMMON NAME:', '').strip()
 
-        # B. Guardar variables en BD
         res_firma = Respuesta.query.filter_by(solicitud_id=solicitud_id, campo_formulario=campo_firma).first()
         if res_firma: res_firma.valor_respuesta = 'FIRMADO'
         else: db.session.add(Respuesta(solicitud_id=solicitud_id, campo_formulario=campo_firma, usuario_asignado_id=current_user.id, valor_respuesta='FIRMADO'))
@@ -334,129 +245,149 @@ def subir_firma_pades(solicitud_id):
         else: db.session.add(Respuesta(solicitud_id=solicitud_id, campo_formulario=campo_nombre_firma, usuario_asignado_id=current_user.id, valor_respuesta=nombre_firmante.upper()))
         db.session.commit()
 
-        # C. Generar PDF Base (El HTML dibujará tu QR y tu nombre)
-        ruta_pdf_original = os.path.join(directorio_temp, f'PazSalvo_{solicitud_id}.pdf')
-        solicitud_temp = SolicitudPazSalvo.query.get(solicitud_id)
-        solicitud_temp.ex_funcionario = Usuario.query.get(solicitud_temp.ex_funcionario_id)
-        resp_temp = Respuesta.query.filter_by(solicitud_id=solicitud_id).all()
-        generar_documento_paz_salvo(solicitud_temp, solicitud_temp.ex_funcionario, resp_temp, ruta_pdf_original)
+        ruta_pdf_original = os.path.join(directorio_oficial, f'PazSalvo_{solicitud_id}.pdf')
+        if not os.path.exists(ruta_pdf_original):
+            solicitud_temp = SolicitudPazSalvo.query.get(solicitud_id)
+            solicitud_temp.ex_funcionario = Usuario.query.get(solicitud_temp.ex_funcionario_id)
+            resp_temp = Respuesta.query.filter_by(solicitud_id=solicitud_id).all()
+            generar_documento_paz_salvo(solicitud_temp, solicitud_temp.ex_funcionario, resp_temp, ruta_pdf_original)
 
-        # D. FIRMA CRIPTOGRÁFICA INVISIBLE Y ESTRICTA PARA FIRMAEC
+        ruta_pdf_temporal_firmado = os.path.join(directorio_oficial, f'PazSalvo_{solicitud_id}_sellando.pdf')
+        
+        # INYECCIÓN CRIPTOGRÁFICA SEGURA
         with open(ruta_pdf_original, 'rb') as inf:
             w = IncrementalPdfFileWriter(inf)
-            
-            # Caja en 0,0,0,0 asegura que pyHanko no tape tu diseño HTML
             append_signature_field(w, SigFieldSpec(sig_field_name=campo_firma, box=(0, 0, 0, 0)))
-            
-            # Subfilter PADES asegura validación del Gobierno (FirmaEC)
             meta = signers.PdfSignatureMetadata(
                 field_name=campo_firma,
-                subfilter=fields.SigSeedSubFilter.PADES
+                subfilter=fields.SigSeedSubFilter.PADES,
+                reason="Firma Institucional INAMHI"
             )
-            
-            # Firmamos SIN el argumento style para que sea transparente
-            pdf_en_memoria = signers.sign_pdf(w, signature_meta=meta, signer=signer)
+            with open(ruta_pdf_temporal_firmado, 'wb') as outf:
+                signers.sign_pdf(w, signature_meta=meta, signer=signer, pdf_out=outf)
 
-        # Sobreescribimos el PDF con la versión ya firmada y segura
-        with open(ruta_pdf_original, 'wb') as outf:
-            pdf_en_memoria.seek(0)
-            outf.write(pdf_en_memoria.read())
-        
+        os.replace(ruta_pdf_temporal_firmado, ruta_pdf_original)
         if os.path.exists(ruta_temp_p12): os.remove(ruta_temp_p12)
-        return jsonify({'status': 'success', 'mensaje': 'Firma estampada'}), 200
+        
+        return jsonify({'status': 'success', 'mensaje': 'Firma estampada exitosamente'}), 200
 
     except Exception as e:
         if os.path.exists(ruta_temp_p12): os.remove(ruta_temp_p12)
-        return jsonify({'mensaje': f'Error de firma: {str(e)}'}), 500
+        return jsonify({'mensaje': f'Error de validación PAdES: Contraseña o certificado incorrectos.'}), 500
+
 
 # ====================================================================
-# 8. RUTA: ELIMINAR SOLICITUD (SOLO ADMINISTRADOR)
+# 6. RUTA: GENERACIÓN Y DESCARGA CON PROTECCIÓN
 # ====================================================================
+@paz_salvo_bp.route('/paz-salvo/descargar-pdf/<int:solicitud_id>')
+@login_required
+def descargar_pdf(solicitud_id):
+    solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
+    directorio_oficial = os.path.join(current_app.root_path, 'static', 'documentos_oficiales')
+    os.makedirs(directorio_oficial, exist_ok=True)
+    ruta_pdf = os.path.join(directorio_oficial, f'PazSalvo_{solicitud.id}.pdf')
+    
+    # Si el archivo NO existe físicamente (es nuevo), lo generamos por primera vez
+    if not os.path.exists(ruta_pdf):
+        solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
+        respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
+        try:
+            generar_documento_paz_salvo(solicitud, solicitud.ex_funcionario, respuestas_db, ruta_pdf)
+        except Exception as e:
+            flash(f'Error al generar el PDF base: {str(e)}', 'danger')
+            return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud.id))
+    
+    # Si ya existe (o se acaba de crear), lo enviamos
+    if os.path.exists(ruta_pdf):
+        return send_file(ruta_pdf, as_attachment=True, download_name=f"Paz_y_Salvo_INAMHI_{solicitud.id}.pdf")
+    else:
+        flash('Error inesperado al crear el documento.', 'danger')
+        return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud.id))
+
+
+@paz_salvo_bp.route('/actualizar-espejo', methods=['POST'])
+@login_required
+def actualizar_espejo():
+    datos_en_vivo = request.form.to_dict()
+    solicitud_id = datos_en_vivo.get('solicitud_id')
+    if not solicitud_id: return ""
+        
+    solicitud = SolicitudPazSalvo.query.get(solicitud_id)
+    if not solicitud: return ""
+         
+    solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
+    respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
+    datos_combinados = {r.campo_formulario: r.valor_respuesta for r in respuestas_db}
+    
+    for k, v in datos_en_vivo.items():
+        if v.strip() != "":
+            datos_combinados[k] = str(v).upper()
+
+    return render_template('paz_salvo/partials/hoja_espejo.html', solicitud=solicitud, datos=datos_combinados)
+
+
 @paz_salvo_bp.route('/paz-salvo/eliminar/<int:solicitud_id>', methods=['POST'])
 @login_required
 def eliminar_solicitud(solicitud_id):
-    # Regla estricta: Solo el Administrador puede borrar
     if current_user.rol.nombre != 'Administrador':
-        return jsonify({'status': 'error', 'mensaje': 'No tiene permisos de administrador para realizar esta acción.'}), 403
+        return jsonify({'status': 'error', 'mensaje': 'No tiene permisos.'}), 403
         
     try:
-        # Primero, eliminamos todas las respuestas asociadas al formulario para evitar conflictos de claves foráneas
         Respuesta.query.filter_by(solicitud_id=solicitud_id).delete()
         
-        # Opcional: Si quieres mantener tu directorio limpio, borra también el PDF asociado
-        directorio_temp = os.path.join(current_app.root_path, 'static', 'temp')
-        ruta_pdf = os.path.join(directorio_temp, f'PazSalvo_{solicitud_id}.pdf')
+        directorio_oficial = os.path.join(current_app.root_path, 'static', 'documentos_oficiales')
+        ruta_pdf = os.path.join(directorio_oficial, f'PazSalvo_{solicitud_id}.pdf')
         if os.path.exists(ruta_pdf):
             os.remove(ruta_pdf)
 
-        # Finalmente, eliminamos la solicitud raíz de la BD
         solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
         db.session.delete(solicitud)
         db.session.commit()
         
-        # Registramos en auditoría (opcional pero buena práctica)
         log = LogAuditoria(usuario_id=current_user.id, modulo='Formularios', accion='ELIMINAR EXPEDIENTE', detalle=f"Eliminó expediente ID: {solicitud_id}")
         db.session.add(log)
         db.session.commit()
             
         return jsonify({'status': 'success', 'mensaje': 'Expediente eliminado correctamente.'})
-        
     except Exception as e:
         db.session.rollback()
         return jsonify({'status': 'error', 'mensaje': str(e)}), 500
     
-# ====================================================================
-# 9. RUTA: VISTA DE SOLO LECTURA (HOJA ESPEJO AISLADA)
-# ====================================================================
 @paz_salvo_bp.route('/paz-salvo/espejo/<int:solicitud_id>')
 @login_required
 def ver_hoja_espejo(solicitud_id):
     solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
     solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
-    
-    # Extraemos todas las respuestas guardadas hasta el momento
     respuestas_db = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
     datos_combinados = {r.campo_formulario: r.valor_respuesta for r in respuestas_db}
     
-    # Renderizamos una plantilla puramente visual
-    return render_template('paz_salvo/ver_espejo.html', 
-                           solicitud=solicitud, 
-                           datos=datos_combinados)
+    return render_template('paz_salvo/ver_espejo.html', solicitud=solicitud, datos=datos_combinados)
 
-# ====================================================================
-# 10. RUTA: VISTA EXCLUSIVA DE "MIS CAMPOS" PARA LAS ÁREAS (SEPARADA)
-# ====================================================================
 @paz_salvo_bp.route('/paz-salvo/mis-campos/<int:solicitud_id>', methods=['GET'])
 @login_required
 def mis_campos_asignados(solicitud_id):
-    # Bloqueo de seguridad: El Administrador no usa esta vista
     if current_user.rol.nombre in ['Administrador', 'Talento Humano - Recepción Documentos']:
         return redirect(url_for('paz_salvo.llenar_formulario', solicitud_id=solicitud_id))
 
     solicitud = SolicitudPazSalvo.query.get_or_404(solicitud_id)
     solicitud.ex_funcionario = Usuario.query.get(solicitud.ex_funcionario_id)
     
-    # Buscamos TODAS las respuestas para dibujar el espejo completo
     todas_las_respuestas = Respuesta.query.filter_by(solicitud_id=solicitud.id).all()
     datos_diccionario = {r.campo_formulario: r.valor_respuesta for r in todas_las_respuestas}
     
-    # Filtramos SOLO los campos que el Administrador le designó a este usuario específico
     mis_campos_asignados = []
     mis_campos_bloqueados = []
     
     for r in todas_las_respuestas:
         if r.usuario_asignado_id == current_user.id:
             mis_campos_asignados.append(r.campo_formulario)
-            # Si el campo ya tiene texto o está firmado, lo bloqueamos para que no lo altere por error
             if r.valor_respuesta and r.valor_respuesta.strip() != "":
                 mis_campos_bloqueados.append(r.campo_formulario)
 
-    # Si no tiene campos, le avisamos
     if not mis_campos_asignados:
         flash('No tiene campos asignados en este trámite actualmente.', 'info')
         return redirect(url_for('areas.mis_tareas'))
 
-    # Renderizamos la página NUEVA Y SEPARADA
     return render_template('paz_salvo/mis_campos.html', 
                            solicitud=solicitud, 
                            campos_asignados=mis_campos_asignados,
